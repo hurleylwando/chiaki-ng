@@ -1,6 +1,8 @@
 name: Build chiaki-ng msys2 x86 Windows
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       libplacebo_version:
