@@ -263,6 +263,8 @@ private:
     void refreshPendingFrameAge();
     void snapshotPendingFrame();
     bool handleShortcut(QKeyEvent *event);
+    void setMouseLook(bool on);
+    bool mouse_look_active = false;
     bool event(QEvent *event) override;
     QObject *focusObject() const override;
     void updateQueueDepthAverage(int depth);

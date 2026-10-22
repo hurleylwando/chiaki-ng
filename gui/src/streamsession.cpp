@@ -12,6 +12,8 @@
 #include "../../lib/src/utils.h"
 
 #include <QKeyEvent>
+#include <QCoreApplication>
+#include <QSettings>
 #include <QMutexLocker>
 #include <QtMath>
 #include <atomic>
@@ -534,6 +536,18 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 			SendFeedbackState();
 		}
 	});
+	chiaki_controller_state_set_idle(&mouse_look_state);
+	{
+		QSettings ml(QCoreApplication::applicationDirPath() + "/mouselook.ini", QSettings::IniFormat);
+		mouse_look_sensitivity = ml.value("sensitivity", mouse_look_sensitivity).toDouble();
+		mouse_look_deadzone = ml.value("deadzone", mouse_look_deadzone).toDouble();
+		mouse_look_smoothing = ml.value("smoothing", mouse_look_smoothing).toDouble();
+		mouse_look_invert_y = ml.value("invert_y", mouse_look_invert_y).toBool();
+	}
+	mouse_look_timer = new QTimer(this);
+	mouse_look_timer->setTimerType(Qt::PreciseTimer);
+	mouse_look_timer->setInterval(4);
+	connect(mouse_look_timer, &QTimer::timeout, this, &StreamSession::UpdateMouseLook);
 	// If duid isn't empty connect with psn
 	chiaki_connect_info.holepunch_session = NULL;
 	if(!connect_info.duid.isEmpty())
@@ -925,6 +939,76 @@ void StreamSession::HandleMouseMoveEvent(QMouseEvent *event, qreal width, qreal 
 	SendFeedbackState();
 }
 
+void StreamSession::SetMouseLook(bool enabled)
+{
+	mouse_look = enabled;
+	mouse_look_dx = mouse_look_dy = mouse_look_sx = mouse_look_sy = 0;
+	chiaki_controller_state_set_idle(&mouse_look_state);
+	if(enabled)
+	{
+		mouse_look_clock.start();
+		mouse_look_timer->start();
+	}
+	else
+		mouse_look_timer->stop();
+	SendFeedbackState();
+}
+
+void StreamSession::HandleMouseLookMove(double dx, double dy)
+{
+	mouse_look_dx += dx;
+	mouse_look_dy += dy;
+}
+
+void StreamSession::HandleMouseLookButton(QMouseEvent *event, bool press)
+{
+	switch(event->button())
+	{
+		case Qt::LeftButton:
+			mouse_look_state.r2_state = press ? 0xff : 0;
+			break;
+		case Qt::RightButton:
+			mouse_look_state.l2_state = press ? 0xff : 0;
+			break;
+		case Qt::MiddleButton:
+			if(press)
+				mouse_look_state.buttons |= CHIAKI_CONTROLLER_BUTTON_R3;
+			else
+				mouse_look_state.buttons &= ~CHIAKI_CONTROLLER_BUTTON_R3;
+			break;
+		default:
+			return;
+	}
+	SendFeedbackState();
+}
+
+void StreamSession::UpdateMouseLook()
+{
+	double dt = mouse_look_clock.nsecsElapsed() / 1e9;
+	mouse_look_clock.restart();
+	if(dt <= 0)
+		return;
+	double vx = mouse_look_dx / dt / mouse_look_sensitivity;
+	double vy = mouse_look_dy / dt / mouse_look_sensitivity * (mouse_look_invert_y ? -1 : 1);
+	mouse_look_dx = mouse_look_dy = 0;
+	mouse_look_sx += (vx - mouse_look_sx) * mouse_look_smoothing;
+	mouse_look_sy += (vy - mouse_look_sy) * mouse_look_smoothing;
+	double rx = 0, ry = 0;
+	double mag = std::sqrt(mouse_look_sx * mouse_look_sx + mouse_look_sy * mouse_look_sy);
+	if(mag >= 0.01)
+	{
+		double out = std::min(1.0, mouse_look_deadzone + (1 - mouse_look_deadzone) * mag);
+		rx = mouse_look_sx / mag * out;
+		ry = mouse_look_sy / mag * out;
+	}
+	int16_t x = (int16_t)(rx * 0x7fff), y = (int16_t)(ry * 0x7fff);
+	if(x == mouse_look_state.right_x && y == mouse_look_state.right_y)
+		return;
+	mouse_look_state.right_x = x;
+	mouse_look_state.right_y = y;
+	SendFeedbackState();
+}
+
 void StreamSession::HandleKeyboardEvent(QKeyEvent *event)
 {
 	if(!keyboard_controller_enabled)
@@ -1236,6 +1320,7 @@ void StreamSession::DpadSendFeedbackState()
 #endif
 	chiaki_controller_state_or(&state, &state, &keyboard_state);
 	chiaki_controller_state_or(&state, &state, &touch_state);
+	chiaki_controller_state_or(&state, &state, &mouse_look_state);
 
 	if(input_block)
 	{
@@ -1292,6 +1377,7 @@ void StreamSession::SendFeedbackState()
 #endif
 	chiaki_controller_state_or(&state, &state, &keyboard_state);
 	chiaki_controller_state_or(&state, &state, &touch_state);
+	chiaki_controller_state_or(&state, &state, &mouse_look_state);
 
 	if(input_block)
 	{

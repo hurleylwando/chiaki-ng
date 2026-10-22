@@ -239,6 +239,18 @@ class StreamSession : public QObject
 		QPair<uint16_t, uint16_t> dpad_touch_value;
 		QTimer *dpad_touch_timer, *dpad_touch_stop_timer;
 		QElapsedTimer double_tap_timer;
+		// Mouse look: mouse movement -> right stick, mouse buttons -> R2/L2/R3
+		bool mouse_look = false;
+		ChiakiControllerState mouse_look_state;
+		QTimer *mouse_look_timer = nullptr;
+		QElapsedTimer mouse_look_clock;
+		double mouse_look_dx = 0, mouse_look_dy = 0;
+		double mouse_look_sx = 0, mouse_look_sy = 0;
+		double mouse_look_sensitivity = 1800;
+		double mouse_look_deadzone = 0.20;
+		double mouse_look_smoothing = 0.35;
+		bool mouse_look_invert_y = false;
+		void UpdateMouseLook();
 		RumbleHapticsIntensity rumble_haptics_intensity;
 		bool start_mic_unmuted;
 		bool session_started;
@@ -367,6 +379,10 @@ class StreamSession : public QObject
 		void HandleMouseReleaseEvent(QMouseEvent *event);
 		void HandleMousePressEvent(QMouseEvent *event);
 		void HandleMouseMoveEvent(QMouseEvent *event, qreal width, qreal height);
+		bool GetMouseLook() const { return mouse_look; }
+		void SetMouseLook(bool enabled);
+		void HandleMouseLookMove(double dx, double dy);
+		void HandleMouseLookButton(QMouseEvent *event, bool press);
 #if CHIAKI_GUI_ENABLE_SPEEX
 		bool ProcessMicFrame(int16_t *echo_buf);
 #endif

@@ -28,6 +28,7 @@ extern "C" {
 #include <QShortcut>
 #include <QStandardPaths>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QGuiApplication>
 #include <QFile>
 #include <QWidget>
@@ -2742,8 +2743,25 @@ void QmlMainWindow::setKeepVideo(bool keep)
     emit keepVideoChanged();
 }
 
+void QmlMainWindow::setMouseLook(bool on)
+{
+    if (on == mouse_look_active || (on && (!session || grab_input)))
+        return;
+    mouse_look_active = on;
+    if (session)
+        session->SetMouseLook(on);
+    setMouseGrabEnabled(on);
+    if (on) {
+        setCursor(Qt::BlankCursor);
+        QCursor::setPos(mapToGlobal(QPoint(width() / 2, height() / 2)));
+    } else {
+        setCursor(has_video && !grab_input && settings->GetHideCursor() ? Qt::BlankCursor : Qt::ArrowCursor);
+    }
+}
+
 void QmlMainWindow::grabInput()
 {
+    setMouseLook(false);
     setCursor(Qt::ArrowCursor);
     grab_input++;
     if (session)
@@ -5102,6 +5120,7 @@ renderer_backend_ready:
     backend = new QmlBackend(settings, this);
     stats_overlay_widget = new StatsOverlayWidget(this, backend);
     connect(backend, &QmlBackend::sessionChanged, this, [this, exit_app_on_stream_exit](StreamSession *s) {
+        setMouseLook(false);
         const bool preserve_startup_warmup = s && startup_warmup_preserve_next_session_change;
         startup_warmup_preserve_next_session_change = false;
         session = s;
@@ -7518,6 +7537,11 @@ bool QmlMainWindow::handleShortcut(QKeyEvent *event)
             else
                 normalTime();
             return true;
+        case Qt::Key_F8:
+            if (!session)
+                return false;
+            setMouseLook(!mouse_look_active);
+            return true;
         default:
             break;
         }
@@ -7570,6 +7594,20 @@ bool QmlMainWindow::event(QEvent *event)
     case QEvent::MouseButtonRelease:
         if (static_cast<QMouseEvent*>(event)->source() != Qt::MouseEventNotSynthesized)
             return true;
+        if (mouse_look_active && session && !grab_input) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (event->type() == QEvent::MouseMove) {
+                const QPoint center = mapToGlobal(QPoint(width() / 2, height() / 2));
+                const QPointF delta = me->globalPosition() - QPointF(center);
+                if (!delta.isNull()) {
+                    session->HandleMouseLookMove(delta.x(), delta.y());
+                    QCursor::setPos(center);
+                }
+            } else {
+                session->HandleMouseLookButton(me, event->type() == QEvent::MouseButtonPress);
+            }
+            return true;
+        }
         if (session && !grab_input) {
             if (event->type() == QEvent::MouseMove)
                 session->HandleMouseMoveEvent(static_cast<QMouseEvent*>(event), width(), height());
@@ -7582,6 +7620,10 @@ bool QmlMainWindow::event(QEvent *event)
         QGuiApplication::sendEvent(quick_window, event);
         break;
     case QEvent::MouseButtonDblClick:
+        if (mouse_look_active && session && !grab_input) {
+            session->HandleMouseLookButton(static_cast<QMouseEvent*>(event), true);
+            return true;
+        }
         if(!settings->GetFullscreenDoubleClickEnabled())
             break;
         if (session && !grab_input) {
@@ -7615,6 +7657,9 @@ bool QmlMainWindow::event(QEvent *event)
             return true;
         }
         QGuiApplication::sendEvent(quick_window, event);
+        break;
+    case QEvent::FocusOut:
+        setMouseLook(false);
         break;
     case QEvent::Close:
         if (!backend->closeRequested()) {
